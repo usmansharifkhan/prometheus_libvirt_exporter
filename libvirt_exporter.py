@@ -1,44 +1,41 @@
 from __future__ import print_function
-import sys
-import argparse
 import libvirt
 import sched
 import time
+import logging
+from os import environ
 from prometheus_client import start_http_server, Gauge
 from xml.etree import ElementTree
 
+logging.basicConfig(level=logging.INFO)
 
-parser = argparse.ArgumentParser(description='libvirt_exporter scrapes domains metrics from libvirt daemon')
-parser.add_argument('-si','--scrape_interval', help='scrape interval for metrics in seconds', default= 5)
-parser.add_argument('-uri','--uniform_resource_identifier', help='Libvirt Uniform Resource Identifier', default= "qemu:///system")
-args = vars(parser.parse_args())
-uri = args["uniform_resource_identifier"]
+SCRAPE_INTERVAL = int(environ.get("SCRAPE_INTERVAL"))
+LIBVIRT_URI = environ.get("LIBVIRT_URI")
 
 
 def connect_to_uri(uri):
     conn = libvirt.open(uri)
 
     if conn == None:
-        print('Failed to open connection to ' + uri, file = sys.stderr)
+        logging.error('Failed to open connection to ' + uri)
     else:
-        print('Successfully connected to ' + uri)
+        logging.info('Successfully connected to ' + uri)
     return conn
 
 
 def get_domains(conn):
-
     domains = []
 
     for id in conn.listDomainsID():
         dom = conn.lookupByID(id)
 
         if dom == None:
-            print('Failed to find the domain ' + dom.name(), file=sys.stderr)
+            logging.error('Failed to find the domain ' + dom.name())
         else:
             domains.append(dom)
 
     if len(domains) == 0:
-        print('No running domains in URI')
+        logging.info('No running domains in URI')
         return None
     else:
         return domains
@@ -130,6 +127,16 @@ def add_metrics(dom, header_mn, g_dict):
         metrics_collection = get_metrics_multidim_collections(dom, metric_names, device="interface")
         unit = ""
 
+    elif header_mn == "libvirt_domain_":
+        metrics_collection = {}
+        metrics_dict_list = [
+            {'name': 'active', 'func': dom.isActive}, {'name': 'max_memory', 'func': dom.maxMemory},
+            {'name': 'max_cpus', 'func': dom.maxVcpus}]
+        for metrics_dict in metrics_dict_list:
+            dimensions = [[metrics_dict.get('func')(), labels]]
+            metrics_collection[metrics_dict.get('name')] = dimensions
+        unit = ""
+
     for mn in metrics_collection:
         metric_name = header_mn + mn + unit
         dimensions = metrics_collection[mn]
@@ -154,26 +161,26 @@ def add_metrics(dom, header_mn, g_dict):
 
 
 def job(uri, g_dict, scheduler):
-    print('BEGIN JOB :', time.time())
+    logging.info('JOB Begun')
     conn = connect_to_uri(uri)
     domains = get_domains(conn)
     while domains is None:
         domains = get_domains(conn)
-        time.sleep(int(args["scrape_interval"]))
+        time.sleep(SCRAPE_INTERVAL)
 
     for dom in domains:
 
-        print(dom.name())
+        logging.debug(dom.name())
 
         headers_mn = ["libvirt_cpu_stats_", "libvirt_mem_stats_", \
-                      "libvirt_block_stats_", "libvirt_interface_"]
+                      "libvirt_block_stats_", "libvirt_interface_", "libvirt_domain_"]
 
         for header_mn in headers_mn:
             g_dict = add_metrics(dom, header_mn, g_dict)
 
     conn.close()
-    print('FINISH JOB :', time.time())
-    scheduler.enter((int(args["scrape_interval"])), 1, job, (uri, g_dict, scheduler))
+    logging.info('JOB FINISHED')
+    scheduler.enter(SCRAPE_INTERVAL, 1, job, (uri, g_dict, scheduler))
 
 
 def main():
@@ -183,8 +190,8 @@ def main():
     g_dict = {}
 
     scheduler = sched.scheduler(time.time, time.sleep)
-    print('START:', time.time())
-    scheduler.enter(0, 1, job, (uri, g_dict, scheduler))
+    logging.info('LIBVERT PROMETHEUS EXPORTER STARTED')
+    scheduler.enter(0, 1, job, (LIBVIRT_URI, g_dict, scheduler))
     scheduler.run()
 
 if __name__ == '__main__':

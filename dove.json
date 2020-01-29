@@ -1,0 +1,4 @@
+{
+    "format": "intechww-docker-local.jfrog.io/libvirt-prom-metrics-exporter:{1}.{0}", 
+    "version": "1.0"
+}
